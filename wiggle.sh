@@ -243,12 +243,36 @@ function process_tasks() {
 
 function main_menu() {
 	# Display the main menu, and the background processing log.  Pressing Enter or Esc will result in the script exiting.
-	dialog \
-	  --title "Processing" \
-	  --begin 3 50 --tailboxbg process.log 30 78 \
-	  --and-widget \
-	  --begin 3 10 --msgbox "Press OK to exit." 5 30
 
+	local CHOICE=continue
+	
+	while [ "$CHOICE" != "EXIT" ]; do
+	
+		dialog \
+		--title "Processing" \
+		--begin 3 50 --tailboxbg process.log 30 78 \
+		--and-widget \
+		--begin 3 10 --no-tags --menu "Main Menu" 20 10 10 SEARCH Search EXIT Exit 2>menu.out
+		local DRES=$?
+		CHOICE=$(cat menu.out)
+		rm menu.out
+		
+		if [ $DRES -eq 0 ]; then
+			case "$CHOICE" in
+				SEARCH)
+					dialog --msgbox "You chose SEARCH." 5 30
+					;;
+				EXIT)
+					;;
+				*)
+					dialog --msgbox "Unknown." 5 30
+					;;
+			esac
+
+		else
+		  CHOICE=EXIT
+		fi
+	done
 }
 
 
@@ -362,10 +386,6 @@ fi
 ######
 
 main_menu
-
-
-# for the menu, use --no-tags
-# --separator string
 
 # --print-maxsize
 
