@@ -212,7 +212,9 @@ function process_fid() {
 
 
 
-# this function will be run on the background (normally).  It will cycle through a number of tasks.  It will check for a 
+# this function will be run on the background (normally).  
+# It will cycle through a number of tasks.  
+# It will check for a particular entry in the database which will tell it to stop.
 function process_tasks() {
 
 	local SITE_ID=$1
@@ -239,6 +241,17 @@ function process_tasks() {
 }
 
 
+function main_menu() {
+	# Display the main menu, and the background processing log.  Pressing Enter or Esc will result in the script exiting.
+	dialog \
+	  --title "Processing" \
+	  --begin 3 50 --tailboxbg process.log 30 78 \
+	  --and-widget \
+	  --begin 3 10 --msgbox "Press OK to exit." 5 30
+
+}
+
+
 
 ######################################
 # Main Process
@@ -248,7 +261,7 @@ function process_tasks() {
 # check for database file.
 dialog --infobox "Checking for Database file: $DB_FILE" 5 50
 if [ ! -e $DB_FILE ]; then
-  dialog --infobox "Database file not found.\nCreating new database file." 5 50
+  dialog --infobox "Database file not found.\nCreating new database file." 6 50
   create_db_file
   if [ $? -ne 0 ]; then
 	dialog --infobox "An unexpected error occurred while creating the database file.  " 5 50
@@ -348,8 +361,8 @@ fi
 
 ######
 
-# Display the main menu, and the background processing log.  Pressing Enter or Esc will result in the script exiting.
-dialog --title "Processing"  --begin 3 50 --tailboxbg process.log 30 78   --and-widget        --begin 3 10 --msgbox "Press OK to exit." 5 30; 
+main_menu
+
 
 # for the menu, use --no-tags
 # --separator string
