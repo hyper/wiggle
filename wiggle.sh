@@ -194,11 +194,18 @@ function process_fid() {
 			local CAT_ID=$(get_category_id "$CATEGORY")
 	# 		echo "INSERT INTO Items (ItemID, Status, Title, Size, CategoryID, Seeders, Leechers, LastCheck) VALUES ($FID, 1, '$TITLE', $SIZE, $CAT_ID, $SEEDERS, $LEECHERS, datetime('now'));"
 			query "INSERT INTO Items (ItemID, Status, Title, Size, CategoryID, Seeders, Leechers, LastCheck) VALUES ($FID, 1, '$TITLE', $SIZE, $CAT_ID, $SEEDERS, $LEECHERS, datetime('now'));"
-		else 
-			rm $FID.dos
+		else
+			# we need to actually verify that the site says the torrent doesn't exist.
+			grep -q "Torrent not found" $FID.dos
+			if [ $? -eq 0 ]; then
+				echo "FID:$FID doesn't exist"
+				query "INSERT INTO Items (ItemID, Status, LastCheck) VALUES ($FID, 2, datetime('now'));"
+			else
+				echo "An unexpected result was received.  Please check the integrity of the site."
+				echo "If changes to the site have invalidated this script, it will need to be modified."
+			fi
 			
-			echo "FID:$FID doesn't exist"
-			query "INSERT INTO Items (ItemID, Status, LastCheck) VALUES ($FID, 2, datetime('now'));"
+			rm $FID.dos
 		fi
 	fi
 }
