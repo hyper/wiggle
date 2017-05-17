@@ -181,8 +181,12 @@ function process_fid() {
 				TiB)
 					SIZE=$(awk "BEGIN {print (($SIZE_A)*1024*1024*1024)}")
 					;;
+				Bytes)
+					SIZE=$(awk "BEGIN {print (($SIZE_A)/1024)}")
+					;;
 				*)
-					SIZE=SIZE_A
+					echo "Unknown Size type: $SIZE_B"
+					SIZE=$SIZE_A
 					;;
 			esac
 		
@@ -192,7 +196,7 @@ function process_fid() {
 			
 			# We have all the data, now we need to add it to the database.
 			local CAT_ID=$(get_category_id "$CATEGORY")
-	# 		echo "INSERT INTO Items (ItemID, Status, Title, Size, CategoryID, Seeders, Leechers, LastCheck) VALUES ($FID, 1, '$TITLE', $SIZE, $CAT_ID, $SEEDERS, $LEECHERS, datetime('now'));"
+			echo "INSERT INTO Items (ItemID, Status, Title, Size, CategoryID, Seeders, Leechers, LastCheck) VALUES ($FID, 1, '$TITLE', $SIZE, $CAT_ID, $SEEDERS, $LEECHERS, datetime('now'));"
 			query "INSERT INTO Items (ItemID, Status, Title, Size, CategoryID, Seeders, Leechers, LastCheck) VALUES ($FID, 1, '$TITLE', $SIZE, $CAT_ID, $SEEDERS, $LEECHERS, datetime('now'));"
 		else
 			# we need to actually verify that the site says the torrent doesn't exist.
