@@ -242,6 +242,25 @@ function process_fid() {
 }
 
 
+function download_fid() {
+	local ID=$1
+	
+	# Get Download Path
+	local DPATH=$(get_setting "DownloadDir")
+	
+	echo "Downloading: $ID"
+
+	local URL=$(data_site_url)
+	curl -s --cookie $COOKIE_FILE --cookie-jar $COOKIE_FILE "${URL}gettorrent.php?fid=$ID" >$DPATH/$ID.torrent
+	if [ $? -ne 0 ]; then
+		echo "Unabled to download: $ID"
+	else
+		echo "Item $ID Downloaded"
+		query "UPDATE Items SET Download=2 WHERE ItemID=$ID"
+	fi
+}
+
+
 
 # this function will be run on the background (normally).  
 # It will cycle through a number of tasks.  
@@ -252,8 +271,9 @@ function process_tasks() {
 
 	RUN_STATE=0
 	while [ $RUN_STATE -eq 0 ]; do
-		
- 		DB_ITEM_ID=$(query "SELECT ItemID FROM Items ORDER BY ItemID DESC LIMIT 1;")
+	
+		# --- get item details for newer items on the site.
+ 		local DB_ITEM_ID=$(query "SELECT ItemID FROM Items ORDER BY ItemID DESC LIMIT 1;")
  		if [ -z "$DB_ITEM_ID" ]; then
 			DB_ITEM_ID=0
 		fi
@@ -261,6 +281,12 @@ function process_tasks() {
 			NEXT_ID=$((DB_ITEM_ID+1))
 			echo "Getting $NEXT_ID"
 			process_fid $NEXT_ID
+ 		fi
+ 		
+ 		# --- download files that have been marked for download.
+ 		local DL_ID=$(query "SELECT ItemID FROM Items WHERE Status=1 AND Download=1 AND Seeders>0 ORDER BY LastCheck, ItemID DESC LIMIT 1")
+ 		if [ -n "$DL_ID" ]; then
+			download_fid $DL_ID
  		fi
 		
 		sleep 1
@@ -373,7 +399,7 @@ function process_items() {
 		local CAT=$(query "SELECT Category FROM Categories WHERE CategoryID=$CATID")
 		
 		
-		dialog --title "Wiggle" --begin 8 30 --infobox "New Item detected.\n\n Item ID: $ID\n Title: $TITLE\n Category: $CAT\n Size: $SIZE\n\nWhat do you want to do with this Item?" 10 80 --and-widget --begin 22 50 --no-tags --no-cancel --no-ok --menu "Item Menu" 12 30 15 DOWNLOAD "Download" IGNORE "Ignore" LATER "Ask again Later" MARK "Mark as Downloaded" EXIT Exit 2>menu.out
+		dialog --title "Wiggle" --begin 8 30 --infobox "New Item detected.\n\n Item ID: $ID\n Title: $TITLE\n Category: $CAT\n Size: $SIZE\n\nWhat do you want to do with this Item?" 11 90 --and-widget --begin 22 50 --no-tags --no-cancel --no-ok --menu "Item Menu" 12 30 15 DOWNLOAD "Download" IGNORE "Ignore" LATER "Ask again Later" MARK "Mark as Downloaded" EXIT Exit 2>menu.out
 		local DRES=$?
 		CHOICE=$(cat menu.out)
 		rm menu.out
