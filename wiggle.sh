@@ -42,6 +42,7 @@ INSERT INTO Config (Version) VALUES (1);
 --   0 = Not Set
 --   1 = Download all
 --   2 = Ignore (do not download or ask to download)
+--   3 = Ask each item in this category.
 CREATE TABLE Categories (
   CategoryID INTEGER PRIMARY KEY,
   Category STRING,
@@ -61,15 +62,15 @@ CREATE TABLE Categories (
 --  2 - Downloaded.
 -- 99 - Dont Get.
 CREATE TABLE Items (
-  ItemID INTEGER,
-  Status INTEGER,
+  ItemID INTEGER UNIQUE,
+  Status INTEGER DEFAULT 0,
   Title STRING,
   Size INTEGER,
   CategoryID INTEGER,
-  Seeders INTEGER,
-  Leechers INTEGER,
+  Seeders INTEGER DEFAULT 0,
+  Leechers INTEGER DEFAULT 0,
   LastCheck DATETIME,
-  Download INTEGER
+  Download INTEGER DEFAULT 0
 );
 
 EOF
@@ -94,6 +95,14 @@ function check_db_version() {
 #	echo "Current DB Version: $VERSION"
 	
 	# if we want to make changes to the database structure, we do it here, bringing it up to the expected version.
+	if [ $VERSION -eq 1 ]; then
+		# we need to modify the database so that the Config table is generic.  Basically a lookup table, that we can lookup any particular setting without having to modify the database (and make it incompatible).
+		# Note that we are leaving URL in the original Config table.
+		query "CREATE TABLE Settings (Name TEXT UNIQUE, Value TEXT DEFAULT NULL);"
+		
+		VERSION=2
+		query "UPDATE Config SET Version=$VERSION;"
+	fi
 }
 
 
@@ -104,6 +113,25 @@ function data_site_url() {
 		URL=FAIL
 	fi
 	echo "$URL"
+}
+
+function get_setting() {
+	local NAME=$1
+	local VALUE=$(query "SELECT Value FROM Settings WHERE Name='$NAME';")
+	echo "$VALUE"
+}
+
+function set_setting() {
+	local NAME=$1
+	local VALUE=$2
+	local VNAME=$(query "SELECT Value FROM Settings WHERE Name='$NAME';")
+	if [ -z "$VNAME" ]; then
+		# No Setting.
+		query "INSERT INTO Settings (Name, Value) VALUES ('$NAME', '$VALUE');"
+	else
+		query "UPDATE Settings SET Value='$VALUE' WHERE Name='$NAME';"
+	fi
+
 }
 
 
@@ -196,8 +224,7 @@ function process_fid() {
 			
 			# We have all the data, now we need to add it to the database.
 			local CAT_ID=$(get_category_id "$CATEGORY")
-			echo "INSERT INTO Items (ItemID, Status, Title, Size, CategoryID, Seeders, Leechers, LastCheck) VALUES ($FID, 1, '$TITLE', $SIZE, $CAT_ID, $SEEDERS, $LEECHERS, datetime('now'));"
-			query "INSERT INTO Items (ItemID, Status, Title, Size, CategoryID, Seeders, Leechers, LastCheck) VALUES ($FID, 1, '$TITLE', $SIZE, $CAT_ID, $SEEDERS, $LEECHERS, datetime('now'));"
+			query "INSERT INTO Items (ItemID, Status, Title, Size, CategoryID, Seeders, Leechers, LastCheck, Download) VALUES ($FID, 1, '$TITLE', $SIZE, $CAT_ID, $SEEDERS, $LEECHERS, datetime('now'), 0);"
 		else
 			# we need to actually verify that the site says the torrent doesn't exist.
 			grep -q "Torrent not found" $FID.dos
@@ -245,6 +272,166 @@ function process_tasks() {
 }
 
 
+function category_menu() {
+	# display the menu for categories.
+
+	local CHOICE=continue
+	
+	while [ "$CHOICE" != "EXIT" ]; do
+	
+		dialog \
+		--title "Categories" \
+		--begin 3 50 --tailboxbg process.log 30 78 \
+		--and-widget \
+		--begin 3 10 --no-tags --menu "Category Menu" 20 10 10 LIST List... EXIT Exit 2>menu.out
+		local DRES=$?
+		CHOICE=$(cat menu.out)
+		rm menu.out
+		
+		if [ $DRES -eq 0 ]; then
+			case "$CHOICE" in
+				LIST)	
+					dialog --msgbox "LIST." 5 30 
+					;;
+				EXIT)
+					;;
+				*)
+					dialog --msgbox "Unknown." 5 30
+					;;
+			esac
+
+		else
+		  CHOICE=EXIT
+		fi
+	done
+}
+
+
+# process any new categories that have been added.  If there is nothing more to process, then it will return 1.
+function process_categories() {
+
+	local CHOICE=none
+	local CATID=$(query "SELECT CategoryID FROM Categories WHERE Status=0 ORDER BY CategoryID LIMIT 1")
+	
+	while [ -n "$CATID" -a "$CHOICE" != "EXIT" ]; do
+	
+		# got a category, need to ask the user about.
+		local CAT=$(query "SELECT Category FROM Categories WHERE CategoryID=$CATID")
+		
+		dialog --title "Wiggle" --begin 8 30 --infobox "New Category detected.\n\n  \"$CAT\"\n\nWhat do you want to do with this category?" 7 50 --and-widget --begin 18 50 --no-tags --no-cancel --no-ok --menu "Category Menu" 11 20 15 ASK "Ask Each Item" DOWNLOAD "Download All" IGNORE "Ignore All" EXIT Exit 2>menu.out
+		local DRES=$?
+		CHOICE=$(cat menu.out)
+		rm menu.out
+		
+		if [ $DRES -eq 0 ]; then
+			case "$CHOICE" in
+				ASK)
+					query "UPDATE Categories SET Status=3 WHERE CategoryID=$CATID"
+					;;
+				DOWNLOAD)
+					query "UPDATE Categories SET Status=1 WHERE CategoryID=$CATID"
+					query "UPDATE Items SET Download=1 WHERE CategoryID=$CATID AND Download=0 AND Seeders>0"
+					;;
+				IGNORE)
+					query "UPDATE Categories SET Status=2 WHERE CategoryID=$CATID"
+					query "UPDATE Items SET Download=99 WHERE CategoryID=$CATID AND Download=0"
+					;;
+				EXIT)
+					;;
+				*)
+					dialog --msgbox "Unknown." 5 30
+					;;
+			esac
+
+		else
+		  CHOICE=EXIT
+		fi
+		
+		if [ "$CHOICE" != "EXIT" ]; then
+			CATID=$(query "SELECT CategoryID FROM Categories WHERE Status=0 ORDER BY CategoryID LIMIT 1")
+		fi
+	done
+	
+	local RES=0
+	if [ "$CHOICE" = "EXIT" ]; then 
+		RES=1
+	fi
+	return $RES
+}
+
+function process_items() {
+	local CHOICE=none
+	local ID=$(query "SELECT ItemID FROM Items WHERE Status=1 AND Download=0 AND Seeders > 0 ORDER BY LastCheck, ItemID DESC LIMIT 1")
+	
+	while [ -n "$ID" -a "$CHOICE" != "EXIT" ]; do
+	
+		# got a category, need to ask the user about.
+		local TITLE=$(query "SELECT Title FROM Items WHERE ItemID=$ID")
+		local CATID=$(query "SELECT CategoryID FROM Items WHERE ItemID=$ID")
+		local SIZE=$(query "SELECT Size FROM Items WHERE ItemID=$ID")
+
+		local CAT=$(query "SELECT Category FROM Categories WHERE CategoryID=$CATID")
+		
+		
+		dialog --title "Wiggle" --begin 8 30 --infobox "New Item detected.\n\n Item ID: $ID\n Title: $TITLE\n Category: $CAT\n Size: $SIZE\n\nWhat do you want to do with this Item?" 10 80 --and-widget --begin 22 50 --no-tags --no-cancel --no-ok --menu "Item Menu" 12 30 15 DOWNLOAD "Download" IGNORE "Ignore" LATER "Ask again Later" MARK "Mark as Downloaded" EXIT Exit 2>menu.out
+		local DRES=$?
+		CHOICE=$(cat menu.out)
+		rm menu.out
+		
+		if [ $DRES -eq 0 ]; then
+			case "$CHOICE" in
+				DOWNLOAD)
+					query "UPDATE Items SET Download=1 WHERE ItemID=$ID"
+					;;
+					
+				IGNORE)
+					query "UPDATE Items SET Download=99 WHERE ItemID=$ID"
+					;;
+					
+				LATER)
+					query "UPDATE Items SET LastCheck=datetime('now') WHERE ItemID=$ID"
+					;;
+					
+				MARK)
+					query "UPDATE Items SET Download=2 WHERE ItemID=$ID"
+					;;
+				EXIT)
+					;;
+				*)
+					dialog --msgbox "Unknown." 5 30
+					;;
+			esac
+
+		else
+		  CHOICE=EXIT
+		fi
+		
+		if [ "$CHOICE" != "EXIT" ]; then
+			ID=$(query "SELECT ItemID FROM Items WHERE Status=1 AND Download=0 AND Seeders > 0 ORDER BY LastCheck, ItemID DESC LIMIT 1")
+		fi
+	done
+	
+	local RES=0
+	if [ "$CHOICE" = "EXIT" ]; then 
+		RES=1
+	fi
+	return $RES
+}
+
+
+# The Process menu will check the database for items that it needs to ask the user.  
+# These would be:
+#    - What to do with new categories.
+#    - Should items be downloaded or not.
+#
+# This is written in a slightly weird way.. If the user actually exits while processing Categories, then we dont want to ask them to process the files.  
+function process_menu() {
+	local CHOICE=continue
+	
+	process_categories && process_items
+}
+
+
 function main_menu() {
 	# Display the main menu, and the background processing log.  Pressing Enter or Esc will result in the script exiting.
 
@@ -256,15 +443,21 @@ function main_menu() {
 		--title "Processing" \
 		--begin 3 50 --tailboxbg process.log 30 78 \
 		--and-widget \
-		--begin 3 10 --no-tags --menu "Main Menu" 20 10 10 SEARCH Search EXIT Exit 2>menu.out
+		--begin 3 10 --no-tags --no-cancel --no-ok --menu "Main Menu" 11 25 4 PROCESS Process SEARCH Search CAT Categories EXIT Exit 2>menu.out
 		local DRES=$?
 		CHOICE=$(cat menu.out)
 		rm menu.out
 		
 		if [ $DRES -eq 0 ]; then
 			case "$CHOICE" in
+				PROCESS)
+					process_menu
+					;;
 				SEARCH)
 					dialog --msgbox "You chose SEARCH." 5 30
+					;;
+				CAT)
+					category_menu
 					;;
 				EXIT)
 					;;
@@ -292,7 +485,7 @@ if [ ! -e $DB_FILE ]; then
   dialog --infobox "Database file not found.\nCreating new database file." 6 50
   create_db_file
   if [ $? -ne 0 ]; then
-	dialog --infobox "An unexpected error occurred while creating the database file.  " 5 50
+	dialog --infobox "An unexpected error occurred while creating the database file." 5 50
 	exit
   fi
 fi
@@ -345,6 +538,21 @@ fi
 # we have a cookies file, and we have the URL, so we can continue.
 # Note, that the URL in the $URL variable will not be used in the sub-functions.  They will be obtained locally within each function.  Changing it here, will not affect the sub-functions.
 
+DOWNDIR=$(get_setting "DownloadDir")
+if [ -z $DOWNDIR ]; then
+	dialog \
+		--title "Enter Download directory for torrent files" \
+		--begin 5 20 \
+		--infobox "Choose the directory that your torrent tool will pick up torrent files to begin downloading" 7 80 \
+		--and-widget \
+			--begin 20 50 \
+			--dselect ~/Downloads 20 60 2>output.txt
+	DOWNDIR=$(cat output.txt)
+	rm output.txt
+	
+	set_setting "DownloadDir" "$DOWNDIR"
+fi
+
 
 # before we do too much more, we need to get the latest Torrent ID.  This will also ensure that the site is working as expected.
 # Note that when background tasks start, we will pass in the ID from the site to save having to look it up again.
@@ -366,6 +574,12 @@ fi
 # now we are pretty sure that the site is working.
 # will now kick off the background process which will cycle through tasks that need to be done.
 # the fore-ground process (interface to the user) will then continue.
+
+# Any Item that doesn't have a specific 'Download' value set, should be set.
+# (This is because original script didn't set that value)
+query "UPDATE Items SET Download=0 WHERE Download IS NULL"
+	
+
 
 
 # We will use a flag in the database to tell the Background Tasks Process to stop.  So lets clear that first.
