@@ -388,6 +388,63 @@ function process_categories() {
 function process_items() {
 	local CHOICE=none
 	local ID=$(query "SELECT ItemID FROM Items WHERE Status=1 AND Download=0 AND Seeders > 0 ORDER BY LastCheck, ItemID DESC LIMIT 1")
+	while [ -n "$ID" -a "$CHOICE" != "EXIT" ]; do
+		# got a category, need to ask the user about.
+		local TITLE=$(query "SELECT Title FROM Items WHERE ItemID=$ID")
+		local CATID=$(query "SELECT CategoryID FROM Items WHERE ItemID=$ID")
+		local SIZE=$(query "SELECT Size FROM Items WHERE ItemID=$ID")
+
+		local CAT=$(query "SELECT Category FROM Categories WHERE CategoryID=$CATID")
+		
+		dialog --title "Wiggle" --begin 8 30 --infobox "New Item detected.\n\n Item ID: $ID\n Title: $TITLE\n Category: $CAT\n Size: $SIZE\n\nWhat do you want to do with this Item?" 11 90 --and-widget --begin 22 50 --no-tags --no-cancel --no-ok --menu "Item Menu" 12 30 15 DOWNLOAD "Download" IGNORE "Ignore" LATER "Ask again Later" MARK "Mark as Downloaded" EXIT Exit 2>menu.out
+		local DRES=$?
+		CHOICE=$(cat menu.out)
+		rm menu.out
+		
+		if [ $DRES -eq 0 ]; then
+			case "$CHOICE" in
+				DOWNLOAD)
+					query "UPDATE Items SET Download=1 WHERE ItemID=$ID"
+					;;
+					
+				IGNORE)
+					query "UPDATE Items SET Download=99 WHERE ItemID=$ID"
+					;;
+					
+				LATER)
+					query "UPDATE Items SET LastCheck=datetime('now') WHERE ItemID=$ID"
+					;;
+					
+				MARK)
+					query "UPDATE Items SET Download=2 WHERE ItemID=$ID"
+					;;
+				EXIT)
+					;;
+				*)
+					dialog --msgbox "Unknown." 5 30
+					;;
+			esac
+
+		else
+		  CHOICE=EXIT
+		fi
+		
+		if [ "$CHOICE" != "EXIT" ]; then
+			ID=$(query "SELECT ItemID FROM Items WHERE Status=1 AND Download=0 AND Seeders > 0 ORDER BY LastCheck, ItemID DESC LIMIT 1")
+		fi
+	done
+	
+	local RES=0
+	if [ "$CHOICE" = "EXIT" ]; then 
+		RES=1
+	fi
+	return $RES
+}
+
+
+function process_items_advanced() {
+	local CHOICE=none
+	local ID=$(query "SELECT ItemID FROM Items WHERE Status=1 AND Download=0 AND Seeders>0 ORDER BY LastCheck, ItemID DESC LIMIT 10")
 	
 	while [ -n "$ID" -a "$CHOICE" != "EXIT" ]; do
 	
@@ -445,6 +502,8 @@ function process_items() {
 }
 
 
+
+
 # The Process menu will check the database for items that it needs to ask the user.  
 # These would be:
 #    - What to do with new categories.
@@ -452,9 +511,103 @@ function process_items() {
 #
 # This is written in a slightly weird way.. If the user actually exits while processing Categories, then we dont want to ask them to process the files.  
 function process_menu() {
-	local CHOICE=continue
-	
 	process_categories && process_items
+}
+
+# Similar to the other process system, except it will show several items at a time, and allow you to select multiple, and then do something with it.
+function adv_process_menu() {
+	process_categories && process_items_advanced
+}
+
+
+function settings_menu() {
+	local CHOICE=continue
+	while [ "$CHOICE" != "EXIT" ]; do
+		dialog \
+		--title "Settings" \
+		--begin 3 10 --no-tags --no-cancel --no-ok --menu "Settings" 13 35 6 URL "Site URL" DOWNLOAD "Download Location" EXIT Exit 2>menu.out
+		local DRES=$?
+		CHOICE=$(cat menu.out)
+		rm menu.out
+		
+		if [ $DRES -eq 0 ]; then
+			case "$CHOICE" in
+				URL)
+					local URL=$(query "SELECT URL FROM Config;")
+					dialog --inputbox "Site URL" 8 50 "$URL" 2> dialog.output
+					if [ $? -eq 0 ]; then
+						local NEWURL=$(cat dialog.output)
+						rm dialog.output
+						query "UPDATE Config SET URL='$NEWURL'"
+						dialog --msgbox "Setting Saved." 5 30
+					fi
+					;;
+				DOWNLOAD)
+					local VVAL=$(query "SELECT Value FROM Settings WHERE Name='DownloadDir'")
+					dialog --inputbox "Download Directory" 8 50 "$VVAL" 2> dialog.output
+					if [ $? -eq 0 ]; then
+						local NEWVAL=$(cat dialog.output)
+						rm dialog.output
+						query "UPDATE Settings SET Value='$NEWVAL' WHERE Name='DownloadDir'"
+						dialog --msgbox "Setting Saved." 5 30
+					fi
+					;;
+				EXIT)
+					;;
+				*)
+					dialog --msgbox "Unknown." 5 30
+					;;
+			esac
+		else
+		  CHOICE=EXIT
+		fi
+	done
+}
+
+
+function search_menu() {
+
+	# Ask the user what they are searching for.
+	dialog --inputbox "Search for (SQL format)" 8 50 2> dialog.output
+	if [ $? -eq 0 ]; then
+		local SEARCH=$(cat dialog.output)
+		rm dialog.output
+		
+		dialog --infobox "Searching... Please wait" 5 50
+
+		
+		#change all the spaces to %
+		
+		echo "#\!/bin/bash" > tmp_menu.sh
+		echo "dialog --notags --buildlist \"Select...\" 30 100 20 \\" >> tmp_menu.sh		
+		
+		query "SELECT ItemID FROM Items WHERE Title LIKE '$SEARCH'" > db.output
+		LINES=$(cat db.output|wc -l)
+		if [ $LINES -le 0 ]; then
+			dialog --msgbox "No Results found." 5 30
+		else
+			for ITEM in $(cat db.output) ;do
+				local TITLE=$(query "SELECT Title FROM Items WHERE ItemID=$ITEM")
+				### need to check for weird characters that might break the output....
+				
+				echo "$ITEM \"$TITLE\" off \\" >> tmp_menu.sh
+			done
+			echo "" >> tmp_menu.sh 
+			chmod +x tmp_menu.sh 
+			
+			./tmp_menu.sh 2> select.output
+			
+			dialog --textbox select.output 20 60
+		
+			rm select.output
+		fi
+		rm db.output
+		
+		
+		
+# 		dialog --textbox db2.output 20 60
+		
+	fi
 }
 
 
@@ -462,14 +615,12 @@ function main_menu() {
 	# Display the main menu, and the background processing log.  Pressing Enter or Esc will result in the script exiting.
 
 	local CHOICE=continue
-	
 	while [ "$CHOICE" != "EXIT" ]; do
-	
 		dialog \
 		--title "Processing" \
 		--begin 3 50 --tailboxbg process.log 30 78 \
 		--and-widget \
-		--begin 3 10 --no-tags --no-cancel --no-ok --menu "Main Menu" 11 25 4 PROCESS Process SEARCH Search CAT Categories EXIT Exit 2>menu.out
+		--begin 3 10 --no-tags --no-cancel --no-ok --menu "Main Menu" 13 25 6 PROCESS Process MULTIPROC Multi-Process SEARCH Search CAT Categories SETTINGS Settings EXIT Exit 2>menu.out
 		local DRES=$?
 		CHOICE=$(cat menu.out)
 		rm menu.out
@@ -479,11 +630,17 @@ function main_menu() {
 				PROCESS)
 					process_menu
 					;;
+				MULTIPROC)
+					adv_process_menu
+					;;					
 				SEARCH)
-					dialog --msgbox "You chose SEARCH." 5 30
+					search_menu
 					;;
 				CAT)
 					category_menu
+					;;
+				SETTINGS)
+					settings_menu
 					;;
 				EXIT)
 					;;
@@ -491,7 +648,6 @@ function main_menu() {
 					dialog --msgbox "Unknown." 5 30
 					;;
 			esac
-
 		else
 		  CHOICE=EXIT
 		fi
@@ -590,7 +746,6 @@ fi
 
 dialog --infobox "Getting the latest ID from the Site" 5 50
 LATEST_ID=$(get_latest_id)
-
 if [ "$LATEST_ID" -le 0 ]; then
 	dialog --infobox "Something is wrong.  Latest ID didn't return expected results" 5 50
 	sleep 5
