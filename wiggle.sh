@@ -567,39 +567,110 @@ function settings_menu() {
 
 function search_menu() {
 
+	local LASTSEARCH=$(get_setting "LastSearch")
+
 	# Ask the user what they are searching for.
-	dialog --inputbox "Search for (SQL format)" 8 50 2> dialog.output
+	dialog --inputbox "Search for (SQL format)" 8 50 "$LASTSEARCH" 2> dialog.output
 	if [ $? -eq 0 ]; then
 		local SEARCH=$(cat dialog.output)
 		rm dialog.output
 		
-		dialog --infobox "Searching... Please wait" 5 50
-
+		# Before searching, should get some parameters first.  Ie, do we want to ignore items that have no seeders... items that have already been downloaded or ignored? etc.
+		dialog --notags --checklist "Search Options to include..." 10 70 8 SEEDERS "Select only items that have seeders" off DOWNLOADED "Select only items that have not been downloaded" on 2>menu.out
+		grep -q SEEDERS menu.out && local ANDSEEDERS=" AND Seeders>0"
+		grep -q DOWNLOADED menu.out && local ANDDL=" AND Download=0"
+		rm menu.out
 		
-		#change all the spaces to %
+		set_setting "LastSearch" "$SEARCH"
+		dialog --infobox "Searching... Please wait" 5 50
+		
+		# TODO: change all the spaces to %
 		
 		echo "#\!/bin/bash" > tmp_menu.sh
-		echo "dialog --notags --buildlist \"Select...\" 30 100 20 \\" >> tmp_menu.sh		
+		echo "dialog --title \"Search Results\"  --notags --buildlist \"Press '$' for Selected column (right), press '^' for Selection column (left)\nPress Space to select an item.\n\nAfter selection is complete, you will be given options for the selection.\" 30 140 23 \\" >> tmp_menu.sh		
 		
-		query "SELECT ItemID FROM Items WHERE Title LIKE '$SEARCH'" > db.output
-		LINES=$(cat db.output|wc -l)
+		query "SELECT ItemID FROM Items WHERE Title LIKE '%${SEARCH}%' $ANDSEEDERS $ANDDL" > db.output
+		local LINES=$(cat db.output|wc -l)
 		if [ $LINES -le 0 ]; then
 			dialog --msgbox "No Results found." 5 30
 		else
+			# Since it can take a while to load up the titles from the ID list, best to provide some feedback so that the user knows it is doing something.
+			local COUNTER=0
+			(
 			for ITEM in $(cat db.output) ;do
 				local TITLE=$(query "SELECT Title FROM Items WHERE ItemID=$ITEM")
 				### need to check for weird characters that might break the output....
 				
 				echo "$ITEM \"$TITLE\" off \\" >> tmp_menu.sh
+				
+				((COUNTER += 1))
+				local PERC=$(awk "BEGIN {print ((($COUNTER)/($LINES))*100)}")
+				echo "$PERC"
 			done
+			) | dialog --title " Retreiving Search Results " --guage "Please Wait..." 7 70 0
+			
 			echo "" >> tmp_menu.sh 
 			chmod +x tmp_menu.sh 
-			
 			./tmp_menu.sh 2> select.output
+			rm tmp_menu.sh
 			
-			dialog --textbox select.output 20 60
-		
-			rm select.output
+			# We need to build up the list of items that we selected, to display to the user.
+			# Then we display a menu, where they can choose what to do with them (Download, Ignore, etc).
+			
+			test -e tmp.output && rm $_
+			
+			LINES=$(cat select.output|wc -w)
+			if [ $LINES -gt 0 ]; then
+				# Since it can take a while to load up the titles from the ID list, best to provide some feedback so that the user knows it is doing something.
+# 				(
+				for ITEM in $(cat select.output) ;do
+					local TITLE=$(query "SELECT Title FROM Items WHERE ItemID=$ITEM")
+					echo "$ITEM - $TITLE" >> tmp.output
+				done
+# 				) &
+				
+				dialog --title "Processing" --begin 3 50 --tailboxbg tmp.output 30 78 --and-widget --begin 35 75 --no-tags --no-cancel --no-ok --menu "Selection Menu" 12 30 15 DOWNLOAD "Download" IGNORE "Ignore" LATER "Ask again Later" MARK "Mark as Downloaded" EXIT Exit 2>menu.out
+				local DRES=$?
+				local CHOICE=$(cat menu.out)
+				rm menu.out
+				if [ $DRES -eq 0 ]; then
+					case "$CHOICE" in
+						DOWNLOAD)
+							for ITEM in $(cat select.output) ;do
+								query "UPDATE Items SET Download=1 WHERE ItemID=$ITEM"
+								echo "Setting $ITEM to Download">>process.log
+							done
+							;;
+							
+						IGNORE)
+							for ITEM in $(cat select.output) ;do
+								query "UPDATE Items SET Download=99 WHERE ItemID=$ITEM"
+								echo "Setting $ITEM to Ignore">>process.log
+							done
+							;;
+							
+						LATER)
+							for ITEM in $(cat select.output) ;do
+								query "UPDATE Items SET LastCheck=datetime('now') WHERE ItemID=$ITEM"
+								echo "Setting $ITEM to Ask Later">>process.log
+							done
+							;;
+							
+						MARK)
+							for ITEM in $(cat select.output) ;do
+								query "UPDATE Items SET Download=2 WHERE ItemID=$ITEM"
+								echo "Marking $ITEM as Downloaded">>process.log
+							done
+							;;
+						EXIT)
+							;;
+						*)
+							dialog --msgbox "Unknown." 5 30
+							;;
+					esac
+				fi
+# 				rm tmp.output
+			fi
 		fi
 		rm db.output
 		
@@ -744,10 +815,10 @@ if [ -z "$LATEST_ITEM_ID" ]; then
 	LATEST_ITEM_ID=0
 fi
 
-dialog --infobox "Getting the latest ID from the Site" 5 50
+dialog --infobox "Getting the latest ID from the Site" 4 60
 LATEST_ID=$(get_latest_id)
 if [ "$LATEST_ID" -le 0 ]; then
-	dialog --infobox "Something is wrong.  Latest ID didn't return expected results" 5 50
+	dialog --infobox "Something is wrong.  Latest ID didn't return expected results" 5 60
 	sleep 5
 	exit 1
 fi
