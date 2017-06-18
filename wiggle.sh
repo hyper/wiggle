@@ -837,11 +837,13 @@ query "UPDATE Items SET Download=0 WHERE Download IS NULL"
 # We will use a flag in the database to tell the Background Tasks Process to stop.  So lets clear that first.
 # Note that if we set TESTMODE, then it will limit it to only one background cycle.
 query "UPDATE Config SET ProcessingStop=$TESTMODE;"
+TOPROC=$(query "SELECT COUNT(*) FROM Items WHERE Status=1 AND Download=0 AND Seeders>0")
 
 echo "-----------------------------------------------">>process.log
 date>>process.log
 echo "Latest ID (Database): $LATEST_ITEM_ID">>process.log
 echo "Latest ID (Site): $LATEST_ID">>process.log
+echo "Items left to process: $TOPROC">>process.log
 echo "Starting Background Tasks">>process.log
 
 
