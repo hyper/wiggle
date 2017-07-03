@@ -576,7 +576,7 @@ function search_menu() {
 		rm dialog.output
 		
 		# Before searching, should get some parameters first.  Ie, do we want to ignore items that have no seeders... items that have already been downloaded or ignored? etc.
-		dialog --notags --checklist "Search Options to include..." 10 70 8 SEEDERS "Select only items that have seeders" off DOWNLOADED "Select only items that have not been downloaded" on 2>menu.out
+		dialog --notags --checklist "Search Options to include..." 10 70 8 SEEDERS "Select only items that have seeders" on DOWNLOADED "Select only items that have not been downloaded" on 2>menu.out
 		grep -q SEEDERS menu.out && local ANDSEEDERS=" AND Seeders>0"
 		grep -q DOWNLOADED menu.out && local ANDDL=" AND Download=0"
 		rm menu.out
@@ -589,7 +589,7 @@ function search_menu() {
 		echo "#\!/bin/bash" > tmp_menu.sh
 		echo "dialog --title \"Search Results\"  --notags --buildlist \"Press '$' for Selected column (right), press '^' for Selection column (left)\nPress Space to select an item.\n\nAfter selection is complete, you will be given options for the selection.\" 30 140 23 \\" >> tmp_menu.sh		
 		
-		query "SELECT ItemID FROM Items WHERE Title LIKE '%${SEARCH}%' $ANDSEEDERS $ANDDL" > db.output
+		query "SELECT ItemID FROM Items WHERE Title LIKE '%${SEARCH}%' $ANDSEEDERS $ANDDL ORDER BY Title" > db.output
 		local LINES=$(cat db.output|wc -l)
 		if [ $LINES -le 0 ]; then
 			dialog --msgbox "No Results found." 5 30
