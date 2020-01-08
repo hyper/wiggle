@@ -7,9 +7,19 @@ export COOKIE_FILE=.cookies.txt
 # This allows you to test functionality without the background process running perpetually.  
 # Eventually we will have an option in the database that indicates that we will have automatic processing, and this will be less useful.
 TESTMODE=0
-if [ "$1" = "--test" ]; then
-  TESTMODE=1
-fi
+DEBUG=0
+
+while [ -n "$1" ]; do
+  if [ "$1" = "--test" ]; then
+    TESTMODE=1
+  else 
+    if [ "$1" = "--debug" ]; then
+      DEBUG=1
+    fi
+  fi
+
+  shift
+done
 
 
 # Note this script is written in bash using the minimum.  Meant to be able to run easily on almost any linux platform, normally without needing to install anything.
@@ -81,9 +91,18 @@ EOF
   return $RESULT
 }
 
+
+function debuglog() {
+  if [ "$DEBUG" = "1" ]; then
+    echo "$1"
+    sleep 2
+  fi  
+}
+
+
 # This query function will allow us to perform an operation, but wait for 20 seconds if the file is locked.  Otherwise we end up with complicated results as you never know if your operation will succeed or not (because we have operations running in the background).  This does also mean that each query we make should not take longer than 20 seconds or this can cause problems.  Might pay to increase this to something much larger, but I dont know how large is too large.
 function query() {
-	sqlite3 -init <(echo ".timeout 20000") $DB_FILE "$1" 2>/dev/null
+  sqlite3 -init <(echo ".timeout 20000") $DB_FILE "$1" 2>/dev/null
 }
 
 
@@ -92,7 +111,7 @@ function check_db_version() {
 
 	# check the current version
 	local VERSION=$(query "SELECT Version FROM Config;")
-#	echo "Current DB Version: $VERSION"
+	test "$DEBUG" = "1" && echo "Current DB Version: $VERSION"
 	
 	# if we want to make changes to the database structure, we do it here, bringing it up to the expected version.
 	if [ $VERSION -eq 1 ]; then
@@ -137,6 +156,7 @@ function set_setting() {
 
 function get_latest_id() {
 	local URL=$(data_site_url)
+        echo "curl -s --cookie $COOKIE_FILE --cookie-jar $COOKIE_FILE \"${URL}alltorrents.php\" | grep \"torrentprofile.php?fid=\"|head -n 1|grep -o \"fid=[0-9]*\"| awk -F= {'print $2'}">>debug.txt
 	curl -s --cookie $COOKIE_FILE --cookie-jar $COOKIE_FILE "${URL}alltorrents.php" | grep "torrentprofile.php?fid="|head -n 1|grep -o "fid=[0-9]*"| awk -F= {'print $2'}
 }
 
@@ -167,6 +187,8 @@ function process_fid() {
 	  echo "Received error code from site: $GETRESULT"
 	  sleep 5
 	else
+
+
 		grep -q "Torrent info" $FID.dos
 		if [ $? -eq 0 ]; then
 			tr -d '\015' <$FID.dos >$FID.full
@@ -214,7 +236,9 @@ function process_fid() {
 					;;
 				*)
 					echo "Unknown Size type: $SIZE_B"
-					SIZE=$SIZE_A
+					cat $FID.size
+					echo "------"
+					SIZE=0
 					;;
 			esac
 		
@@ -224,6 +248,7 @@ function process_fid() {
 			
 			# We have all the data, now we need to add it to the database.
 			local CAT_ID=$(get_category_id "$CATEGORY")
+			echo "INSERT INTO Items (ItemID, Status, Title, Size, CategoryID, Seeders, Leechers, LastCheck, Download) VALUES ($FID, 1, '$TITLE', $SIZE, $CAT_ID, $SEEDERS, $LEECHERS, datetime('now'), 0);"
 			query "INSERT INTO Items (ItemID, Status, Title, Size, CategoryID, Seeders, Leechers, LastCheck, Download) VALUES ($FID, 1, '$TITLE', $SIZE, $CAT_ID, $SEEDERS, $LEECHERS, datetime('now'), 0);"
 		else
 			# we need to actually verify that the site says the torrent doesn't exist.
@@ -274,10 +299,12 @@ function process_tasks() {
 	
 		# --- get item details for newer items on the site.
  		local DB_ITEM_ID=$(query "SELECT ItemID FROM Items ORDER BY ItemID DESC LIMIT 1;")
+            
+#		echo "DB_ITEM_ID: $DB_ITEM_ID"
  		if [ -z "$DB_ITEM_ID" ]; then
 			DB_ITEM_ID=0
 		fi
- 		if [ $DB_ITEM_ID -lt $SITE_ID ]; then
+ 		if [[ $DB_ITEM_ID -lt $SITE_ID ]]; then
 			NEXT_ID=$((DB_ITEM_ID+1))
 			echo "Getting $NEXT_ID"
 			process_fid $NEXT_ID
@@ -670,6 +697,7 @@ function search_menu() {
 					esac
 				fi
 # 				rm tmp.output
+				rm select.output
 			fi
 		fi
 		rm db.output
@@ -746,6 +774,7 @@ fi
 # Now that we know that the database exists, we need to check that it is up-to-date.
 check_db_version
 
+
 URL=$(data_site_url)
 if [ "$URL" = "FAIL" ]; then
 	dialog --infobox "URL is invalid." 5 50
@@ -815,9 +844,10 @@ if [ -z "$LATEST_ITEM_ID" ]; then
 	LATEST_ITEM_ID=0
 fi
 
+
 dialog --infobox "Getting the latest ID from the Site" 4 60
 LATEST_ID=$(get_latest_id)
-if [ "$LATEST_ID" -le 0 ]; then
+if [ -z "$LATEST_ID" -o "$LATEST_ID" -le 0 ]; then
 	dialog --infobox "Something is wrong.  Latest ID didn't return expected results" 5 60
 	sleep 5
 	exit 1
@@ -845,7 +875,7 @@ echo "Latest ID (Database): $LATEST_ITEM_ID">>process.log
 echo "Latest ID (Site): $LATEST_ID">>process.log
 echo "Items left to process: $TOPROC">>process.log
 echo "Starting Background Tasks">>process.log
-
+clear
 
 process_tasks $LATEST_ID >> process.log &
 TASKS_PID=$!
@@ -856,6 +886,8 @@ if [ $TASKS_PID -eq 0 ]; then
 fi
 
 ######
+clear
+echo "Menu is about to load"
 
 main_menu
 
